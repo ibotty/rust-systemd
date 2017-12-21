@@ -158,7 +158,6 @@ pub enum JournalWaitResult {
     Invalidate
 }
 
-
 impl Journal {
     /// Open the systemd journal for reading.
     ///
@@ -266,23 +265,9 @@ impl Journal {
         }
     }
 
-    /// Iterate through all elements from the current cursor, then await the
-    /// next record(s) and wait again.
-    pub fn watch_all_elements<F>(&mut self, mut f: F) -> Result<()>
-        where F: FnMut(JournalRecord) -> Result<()> {
-            loop {
-                let candidate = self.next_record()?;
-                let rec = match candidate {
-                    Some(rec) => rec,
-                    None => { loop {
-                        if let Some(r) = self.await_next_record(None)? {
-                            break r;
-                        }
-                    }}
-                };
-                f(rec)?
-            }
-        }
+    pub fn iterate_from_cursor_waiting_for_new_records(self) -> JournalEndlessIterator {
+        JournalEndlessIterator::new(self)
+    }
 
     /// Seek to a specific position in journal. On success, returns a cursor
     /// to the current entry.
@@ -373,6 +358,36 @@ impl Drop for Journal {
         if !self.j.is_null() {
             unsafe {
                 ffi::sd_journal_close(self.j);
+            }
+        }
+    }
+}
+
+pub struct JournalEndlessIterator {
+    journal: Journal
+}
+
+impl JournalEndlessIterator {
+    pub fn new(journal: Journal) -> JournalEndlessIterator { 
+        JournalEndlessIterator { journal: journal }
+    }
+}
+
+impl Iterator for JournalEndlessIterator {
+    type Item = JournalRecord;
+
+    fn next(&mut self) -> Option<JournalRecord> {
+        loop {
+            match self.journal.next_record() {
+                Ok(Some(rec)) => return Some(rec),
+                Ok(None) => { loop {
+                    match self.journal.await_next_record(None) {
+                        Ok(Some(r)) => return Some(r),
+                        Err(_) => return None,
+                        Ok(None) => continue
+                    }
+                }},
+                Err(_) => return None
             }
         }
     }
