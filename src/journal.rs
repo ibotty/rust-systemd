@@ -374,21 +374,19 @@ impl JournalEndlessIterator {
 }
 
 impl Iterator for JournalEndlessIterator {
-    type Item = JournalRecord;
+    type Item = Result<JournalRecord>;
 
-    fn next(&mut self) -> Option<JournalRecord> {
-        loop {
-            match self.journal.next_record() {
-                Ok(Some(rec)) => return Some(rec),
-                Ok(None) => { loop {
-                    match self.journal.await_next_record(None) {
-                        Ok(Some(r)) => return Some(r),
-                        Err(_) => return None,
-                        Ok(None) => continue
-                    }
-                }},
-                Err(_) => return None
-            }
-        }
+    fn next(&mut self) -> Option<Result<JournalRecord>> {
+        fn f(journal: &mut Journal) -> Result<JournalRecord> {
+                Ok(match journal.next_record()? {
+                    Some(rec) => rec,
+                    None => { loop {
+                        if let Some(r) = journal.await_next_record(None)? {
+                            break r
+                        }
+                    }},
+                })
+        };
+        Some(f(&mut self.journal))
     }
 }
