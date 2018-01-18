@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::io::ErrorKind::InvalidData;
 use std::os::raw::c_void;
+use std::os::unix::io::RawFd;
 use std::u64;
 use ffi::array_to_iovecs;
 use ffi::id128::sd_id128_t;
@@ -234,6 +235,19 @@ impl Journal {
         }
         
         self.get_record()
+    }
+
+    pub fn get_fd(&mut self) -> Result<RawFd> {
+        Ok(sd_try!(ffi::sd_journal_get_fd(self.j)))
+    }
+
+    pub fn process(&mut self) -> Result<JournalWaitResult> {
+        match sd_try!(ffi::sd_journal_process(self.j)) {
+            ffi::SD_JOURNAL_NOP => Ok(JournalWaitResult::Nop),
+            ffi::SD_JOURNAL_APPEND => Ok(JournalWaitResult::Append),
+            ffi::SD_JOURNAL_INVALIDATE => Ok(JournalWaitResult::Invalidate),
+            _ => Err(io::Error::new(InvalidData, "Failed to wait for changes"))
+        }
     }
 
     /// Wait for next record to arrive.
