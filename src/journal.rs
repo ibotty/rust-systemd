@@ -258,12 +258,12 @@ impl Journal {
     pub fn await_next_record(&mut self, wait_time: Option<time::Duration>) -> Result<Option<JournalRecord>> {
         match self.wait(wait_time)? {
             JournalWaitResult::Nop => Ok(None),
-            JournalWaitResult::Append => self.next_record(),
+            JournalWaitResult::Append => self.get_record(),
 
             // This is possibly wrong, but I can't generate a scenario with 
             // ..::Invalidate and neither systemd's journalctl, 
             // systemd-journal-upload, and other utilities handle that case.
-            JournalWaitResult::Invalidate => self.next_record()
+            JournalWaitResult::Invalidate => self.get_record()
         }
     }
 
