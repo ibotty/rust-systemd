@@ -20,6 +20,7 @@ use mbox::MString;
 /// you need precise control over which fields are sent to systemd.
 pub fn send(args: &[&str]) -> c_int {
     let iovecs = array_to_iovecs(args);
+    println!(">>> sd_journal_sendv");
     unsafe { ffi::sd_journal_sendv(iovecs.as_ptr(), iovecs.len() as c_int) }
 }
 
@@ -188,7 +189,9 @@ impl Journal {
         };
 
         let mut journal = Journal { j: ptr::null_mut() };
+        println!(">>> sd_journal_open");
         sd_try!(ffi::sd_journal_open(&mut journal.j, flags));
+        println!(">>> sd_journal_seek_head");
         sd_try!(ffi::sd_journal_seek_head(journal.j));
         Ok(journal)
     }
@@ -197,6 +200,7 @@ impl Journal {
     /// It returns Result<Option<...>> out of convenience for calling
     /// functions. It always returns Ok(Some(...)) if successful.
     fn get_record(&mut self) -> Result<Option<JournalRecord>> {
+        println!(">>> sd_journal_restart_data");
         unsafe { ffi::sd_journal_restart_data(self.j) }
 
         let mut ret: JournalRecord = BTreeMap::new();
@@ -204,6 +208,7 @@ impl Journal {
         let mut sz: size_t = 0;
         let data: *mut u8 = ptr::null_mut();
         while sd_try!(ffi::sd_journal_enumerate_data(self.j, &data, &mut sz)) > 0 {
+            println!(">>> sd_journal_enumerate_data");
             unsafe {
                 let b = ::std::slice::from_raw_parts_mut(data, sz as usize);
                 let field = ::std::str::from_utf8_unchecked(b);
@@ -220,6 +225,7 @@ impl Journal {
     /// Read the next record from the journal. Returns `Ok(None)` if there
     /// are no more records to read.
     pub fn next_record(&mut self) -> Result<Option<JournalRecord>> {
+        println!(">>> sd_journal_next");
         if sd_try!(ffi::sd_journal_next(self.j)) == 0 {
             return Ok(None);
         }
@@ -231,6 +237,7 @@ impl Journal {
     /// Read the previous record from the journal. Returns `Ok(None)` if there
     /// are no more records to read.
     pub fn previous_record(&mut self) -> Result<Option<JournalRecord>> {
+        println!(">>> sd_journal_previous");
         if sd_try!(ffi::sd_journal_previous(self.j)) == 0 {
             return Ok(None);
         }
@@ -244,7 +251,9 @@ impl Journal {
 
         let time = wait_time.map(usec_from_duration).unwrap_or(::std::u64::MAX);
 
-        match sd_try!(ffi::sd_journal_wait(self.j, time)) {
+        let res = sd_try!(ffi::sd_journal_wait(self.j, time));
+        println!(">>> sd_journal_wait: {}", res);
+        match res {
             ffi::SD_JOURNAL_NOP => Ok(JournalWaitResult::Nop),
             ffi::SD_JOURNAL_APPEND => Ok(JournalWaitResult::Append),
             ffi::SD_JOURNAL_INVALIDATE => Ok(JournalWaitResult::Invalidate),
@@ -289,10 +298,17 @@ impl Journal {
     /// to the current entry.
     pub fn seek(&mut self, seek: JournalSeek) -> Result<String> {
         match seek {
-            JournalSeek::Head => sd_try!(ffi::sd_journal_seek_head(self.j)),
+            JournalSeek::Head => {
+                println!(">>> sd_journal_seek_head");
+                sd_try!(ffi::sd_journal_seek_head(self.j))
+            },
             JournalSeek::Current => 0,
-            JournalSeek::Tail => sd_try!(ffi::sd_journal_seek_tail(self.j)),
+            JournalSeek::Tail => {
+                println!(">>> sd_journal_seek_tail");
+                sd_try!(ffi::sd_journal_seek_tail(self.j))
+            },
             JournalSeek::ClockMonotonic { boot_id, usec } => {
+                println!(">>> sd_journal_seek_monotonic_usec");
                 sd_try!(ffi::sd_journal_seek_monotonic_usec(self.j,
                                                             sd_id128_t {
                                                                 bytes: *boot_id.as_bytes(),
@@ -300,17 +316,23 @@ impl Journal {
                                                             usec))
             }
             JournalSeek::ClockRealtime { usec } => {
+                println!(">>> sd_journal_seek_realtime_usec");
                 sd_try!(ffi::sd_journal_seek_realtime_usec(self.j, usec))
             }
             JournalSeek::Cursor { cursor } => {
                 let c = try!(CString::new(cursor));
+                println!(">>> sd_journal_seek_cursor");
                 sd_try!(ffi::sd_journal_seek_cursor(self.j, c.as_ptr()))
             }
         };
         let c: *mut c_char = ptr::null_mut();
-        if unsafe { ffi::sd_journal_get_cursor(self.j, &c) != 0 } {
+        let ret = unsafe { ffi::sd_journal_get_cursor(self.j, &c) };
+        println!(">>> sd_journal_get_cursor {}", ret);
+        if ret != 0 {
             // Cursor may need to be re-aligned on a real entry first.
+            println!(">>> sd_journal_next");
             sd_try!(ffi::sd_journal_next(self.j));
+            println!(">>> sd_journal_get_cursor");
             sd_try!(ffi::sd_journal_get_cursor(self.j, &c));
         }
         let cs = unsafe { MString::from_raw(c) };
@@ -322,6 +344,7 @@ impl Journal {
     pub fn cursor(&self) -> Result<String> {
         let mut c_cursor: *mut c_char = ptr::null_mut();
 
+        println!(">>> sd_journal_get_cursor");
         sd_try!(ffi::sd_journal_get_cursor(self.j, &mut c_cursor));
 
         let cursor = unsafe { MString::from_raw(c_cursor) };
@@ -332,6 +355,7 @@ impl Journal {
     /// Returns timestamp at which current journal is recorded
     pub fn timestamp(&self) -> Result<time::SystemTime> {
         let mut timestamp_us: u64 = 0;
+        println!(">>> sd_journal_get_realtime_usec");
         sd_try!(ffi::sd_journal_get_realtime_usec(self.j, &mut timestamp_us));
         Ok(system_time_from_realtime_usec(timestamp_us))
     }
@@ -344,18 +368,21 @@ impl Journal {
         filter.extend(val.into());
         let data = filter.as_ptr() as *const c_void;
         let datalen = filter.len() as size_t;
+        println!(">>> sd_journal_add_match");
         sd_try!(ffi::sd_journal_add_match(self.j, data, datalen));
         Ok(self)
     }
 
     /// Inserts a disjunction (i.e. logical OR) in the match list.
     pub fn match_or(&mut self) -> Result<&mut Journal> {
+        println!(">>> sd_journal_add_disjunction");
         sd_try!(ffi::sd_journal_add_disjunction(self.j));
         Ok(self)
     }
 
     /// Inserts a conjunction (i.e. logical AND) in the match list.
     pub fn match_and(&mut self) -> Result<&mut Journal> {
+        println!(">>> sd_journal_add_conjunction");
         sd_try!(ffi::sd_journal_add_conjunction(self.j));
         Ok(self)
     }
@@ -364,6 +391,7 @@ impl Journal {
     /// After this call all filtering is removed and all entries in
     /// the journal will be iterated again.
     pub fn match_flush(&mut self) -> Result<&mut Journal> {
+        println!(">>> sd_journal_flush_matches");
         unsafe { ffi::sd_journal_flush_matches(self.j) };
         Ok(self)
     }
@@ -373,6 +401,7 @@ impl Drop for Journal {
     fn drop(&mut self) {
         if !self.j.is_null() {
             unsafe {
+                println!(">>> sd_journal_close");
                 ffi::sd_journal_close(self.j);
             }
         }
